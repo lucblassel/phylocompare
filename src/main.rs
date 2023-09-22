@@ -1,11 +1,12 @@
 use std::{
+    ffi::{OsStr, OsString},
     fs::{metadata, File},
     io::Write,
     path::PathBuf,
 };
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use gzp::{deflate::Gzip, syncz::SyncZBuilder};
 use indicatif::ProgressIterator;
 use phylotree::tree::Comparison;
@@ -16,26 +17,21 @@ mod io;
 /// Compare trees to reference trees
 struct Cli {
     /// Directory containing reference trees
+    #[clap(index = 1)]
     ref_trees: PathBuf,
     /// Directory containing trees to compare
+    #[clap(index = 2)]
     cmp_trees: Vec<PathBuf>,
     /// Output file
     #[arg(short, long)]
     output: PathBuf,
+    /// If specified, the program will extract pairwise distances, compare them
+    /// and write the result in the specified file
+    #[arg(short, long)]
+    distances: Option<PathBuf>,
     /// Exit the program early on error instead of listing them at the end
     #[arg(short, long)]
     strict: bool,
-    /// Comparison Mode for the tool
-    #[arg(short, long, value_enum, default_value_t=CompMode::Topology)]
-    mode: CompMode,
-}
-
-#[derive(Clone, ValueEnum)]
-enum CompMode {
-    Topology,
-    Distances,
-    Both,
-    Branches,
 }
 
 const TREES_HEADER: [&str; 6] = ["id", "size", "rf", "norm_rf", "rf_weight", "kf_score"];
@@ -61,7 +57,8 @@ fn main() -> Result<()> {
     eprintln!("Reference trees loaded: {}", ref_trees.len());
 
     // init output file
-    let output = File::create(args.output).context("Could not create output file")?;
+    let output_path = add_extension(args.output);
+    let output = File::create(output_path).context("Could not create output file")?;
     let mut writer = SyncZBuilder::<Gzip, _>::new().from_writer(output);
 
     // Write header to output file
@@ -82,18 +79,11 @@ fn main() -> Result<()> {
             }
         };
 
-        match args.mode {
-            CompMode::Branches => eprintln!("Comparing branches"),
-            _ => {
-                if let Some(reftree) = ref_trees.get(&id) {
-                    let cmp = reftree.compare_topologies(&tree)?;
-                    writer.write_all(
-                        (format_record(&id, reftree.n_leaves(), &cmp) + "\n").as_bytes(),
-                    )?;
-                } else {
-                    not_found.push(id)
-                }
-            }
+        if let Some(reftree) = ref_trees.get(&id) {
+            let cmp = reftree.compare_topologies(&tree)?;
+            writer.write_all((format_record(&id, reftree.n_leaves(), &cmp) + "\n").as_bytes())?;
+        } else {
+            not_found.push(id)
         }
     }
 
@@ -118,6 +108,17 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn add_extension(path: PathBuf) -> PathBuf {
+    match path.extension().and_then(OsStr::to_str) {
+        Some("gz") => path,
+        _ => {
+            let mut path_str: OsString = path.into_os_string();
+            path_str.push(".gz");
+            path_str.into()
+        }
+    }
 }
 
 fn format_record(id: &str, size: usize, cmp: &Comparison) -> String {
