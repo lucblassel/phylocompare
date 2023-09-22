@@ -3,13 +3,16 @@ use std::{
     fs::{metadata, File},
     io::Write,
     path::PathBuf,
+    thread,
 };
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use crossbeam_channel::unbounded;
 use gzp::{deflate::Gzip, syncz::SyncZBuilder};
 use indicatif::ProgressIterator;
 use phylotree::tree::Comparison;
+use rayon::prelude::*;
 
 mod io;
 
@@ -66,7 +69,9 @@ fn main() -> Result<()> {
 
     let mut errors = vec![];
     let mut not_found = vec![];
+    let mut pairs = vec![];
 
+    // Load tree pairs
     for pair in io::trees_iter(&args.cmp_trees[0])?.progress_count(ref_trees.len() as u64) {
         let (id, tree) = match pair {
             Ok(p) => p,
@@ -80,13 +85,41 @@ fn main() -> Result<()> {
         };
 
         if let Some(reftree) = ref_trees.get(&id) {
-            let cmp = reftree.compare_topologies(&tree)?;
-            writer.write_all((format_record(&id, reftree.n_leaves(), &cmp) + "\n").as_bytes())?;
+            pairs.push((id, reftree.clone(), tree));
         } else {
             not_found.push(id)
         }
     }
 
+    // Compare trees
+    let records: Result<Vec<_>, _> = pairs
+        .clone()
+        .into_par_iter()
+        .map(|(id, reftree, cmptree)| {
+            reftree
+                .compare_topologies(&cmptree)
+                .map(|c| format_record(&id, reftree.n_leaves(), &c))
+        })
+        .collect();
+
+    // let (sender, receiver) = unbounded();
+    // thread::spawn(move || {
+    //     pairs
+    //         .into_par_iter()
+    //         .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
+    //             let res = reftree
+    //                 .compare_topologies(&cmptree)
+    //                 .map(|c| format_record(&id, reftree.n_leaves(), &c));
+    //             sender.send(res).unwrap()
+    //         });
+    //     drop(sender);
+    // });
+    //
+    // for record in receiver {
+    //     writer.write_all((record? + "\n").as_bytes())?;
+    // }
+
+    writer.write_all((records?.join("\n") + "\n").as_bytes())?;
     writer.flush()?;
 
     if !not_found.is_empty() {
