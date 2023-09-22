@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
 use phylotree::tree::Tree;
-use std::{collections::HashMap, ffi::OsStr, fs, path::Path};
+use std::{
+    collections::HashMap,
+    ffi::{OsStr, OsString},
+    fs,
+    path::{Path, PathBuf},
+};
 
 // Check if file extensions match newick ones
 pub fn is_newick(path: &Path) -> bool {
@@ -45,4 +50,16 @@ pub fn trees_iter(dir: &Path) -> Result<impl Iterator<Item = Result<(String, Tre
         .map(|e| e.path())
         .filter(|p| is_newick(p))
         .map(|p| read_tree(&p)))
+}
+
+// Add .gz extension to filepath if needed
+pub fn add_gz_ext(path: PathBuf) -> PathBuf {
+    match path.extension().and_then(OsStr::to_str) {
+        Some("gz") => path,
+        _ => {
+            let mut path_str: OsString = path.into_os_string();
+            path_str.push(".gz");
+            path_str.into()
+        }
+    }
 }

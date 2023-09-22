@@ -11,9 +11,11 @@ use clap::Parser;
 use crossbeam_channel::unbounded;
 use gzp::{deflate::Gzip, syncz::SyncZBuilder};
 use indicatif::ProgressIterator;
-use phylotree::tree::Comparison;
+use itertools::Itertools;
+use phylotree::tree::Tree;
 use rayon::prelude::*;
 
+mod csv;
 mod io;
 
 #[derive(Parser)]
@@ -28,6 +30,9 @@ struct Cli {
     /// Output file
     #[arg(short, long)]
     output: PathBuf,
+    /// Compare branch lengths instead of tree metrics
+    #[arg(short, long)]
+    lengths: bool,
     /// If specified, the program will extract pairwise distances, compare them
     /// and write the result in the specified file
     #[arg(short, long)]
@@ -36,10 +41,6 @@ struct Cli {
     #[arg(short, long)]
     strict: bool,
 }
-
-const TREES_HEADER: [&str; 6] = ["id", "size", "rf", "norm_rf", "rf_weight", "kf_score"];
-const DISTS_HEADER: [&str; 4] = ["id", "ref", "comp", "diff"];
-const BRLNS_HEADER: [&str; 3] = ["id", "type", "length"];
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -60,12 +61,17 @@ fn main() -> Result<()> {
     eprintln!("Reference trees loaded: {}", ref_trees.len());
 
     // init output file
-    let output_path = add_extension(args.output);
+    let output_path = io::add_gz_ext(args.output);
     let output = File::create(output_path).context("Could not create output file")?;
     let mut writer = SyncZBuilder::<Gzip, _>::new().from_writer(output);
 
     // Write header to output file
-    writer.write_all((TREES_HEADER.join(",") + "\n").as_bytes())?;
+    let out_type = if args.lengths {
+        csv::CSVType::Branches
+    } else {
+        csv::CSVType::Trees
+    };
+    writer.write_all((csv::get_header_string(out_type) + "\n").as_bytes())?;
 
     let mut errors = vec![];
     let mut not_found = vec![];
@@ -97,9 +103,7 @@ fn main() -> Result<()> {
         pairs
             .into_par_iter()
             .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
-                let res = reftree
-                    .compare_topologies(&cmptree)
-                    .map(|c| format_record(&id, reftree.n_leaves(), &c));
+                let res = do_comparison(&id, &reftree, &cmptree, args.lengths);
                 sender.send(res).unwrap()
             });
         drop(sender);
@@ -132,20 +136,33 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn add_extension(path: PathBuf) -> PathBuf {
-    match path.extension().and_then(OsStr::to_str) {
-        Some("gz") => path,
-        _ => {
-            let mut path_str: OsString = path.into_os_string();
-            path_str.push(".gz");
-            path_str.into()
-        }
-    }
-}
+// The heart of the program
+fn do_comparison(id: &str, reftree: &Tree, cmptree: &Tree, brlens: bool) -> Result<String> {
+    let res = if brlens {
+        let (refb, cmpb, common) = reftree.compare_branch_lengths(cmptree, false)?;
+        let ref_s = refb
+            .into_iter()
+            .map(|v| csv::format_branch_record(id, Some(v), None))
+            .join("\n")
+            + "\n";
 
-fn format_record(id: &str, size: usize, cmp: &Comparison) -> String {
-    format!(
-        "{id},{size},{},{},{},{}",
-        cmp.rf, cmp.norm_rf, cmp.weighted_rf, cmp.branch_score
-    )
+        let common_s = common
+            .into_iter()
+            .map(|(r, c)| csv::format_branch_record(id, Some(r), Some(c)))
+            .join("\n")
+            + "\n";
+
+        let cmp_s = cmpb
+            .into_iter()
+            .map(|v| csv::format_branch_record(id, None, Some(v)))
+            .join("\n");
+
+        ref_s + &common_s + &cmp_s
+    } else {
+        reftree
+            .compare_topologies(cmptree)
+            .map(|c| csv::format_tree_record(id, reftree.n_leaves(), &c))?
+    };
+
+    Ok(res)
 }
