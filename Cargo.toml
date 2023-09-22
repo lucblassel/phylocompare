@@ -13,3 +13,6 @@ indicatif = "0.17.6"
 itertools = "0.11.0"
 phylotree = "0.1.2"
 rayon = "1.8.0"
+
+[profile.release]
+debug = 1
