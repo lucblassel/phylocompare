@@ -1,0 +1,37 @@
+jobs:
+  release:
+    name: Release - ${{ matrix.platform.release_for }}
+    strategy:
+      matrix:
+        - release_for: macOs-arm64
+          os: macOS-latest
+          target: aarch64-apple-darwin
+          name: phylocompare-Darwin-aarch64.tar.gz
+          command: build
+        - release_for: macOs-x86_64
+          os: macOS-latest
+          target: x86_64-apple-darwin
+          name: phylocompare-Darwin-x86_64.tar.gz
+          command: build
+        - release_for: Linux-x86_64-GNU
+          os: ubuntu-20.04
+          target: x86_64-unknown-linux-gnu
+          name: phylocompare-linux-gnu-x86_64.tar.gz
+          command: build
+        - release_for: Linux-x86_64-MUSL
+          os: ubuntu-20.04
+          target: x86_64-unknown-linux-musl
+          name: phylocompare-linux-musl-x86_64.tar.gz
+          command: build
+
+    runs_on: ${{ matrix.platform.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v0
+        with:
+          command: ${{ matrix.platform.command }}
+          target: ${{ matrix.platform.target }}
+          args: "--locked --release"
+          strip: true
