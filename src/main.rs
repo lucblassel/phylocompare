@@ -92,34 +92,23 @@ fn main() -> Result<()> {
     }
 
     // Compare trees
-    let records: Result<Vec<_>, _> = pairs
-        .clone()
-        .into_par_iter()
-        .map(|(id, reftree, cmptree)| {
-            reftree
-                .compare_topologies(&cmptree)
-                .map(|c| format_record(&id, reftree.n_leaves(), &c))
-        })
-        .collect();
+    let (sender, receiver) = unbounded();
+    thread::spawn(move || {
+        pairs
+            .into_par_iter()
+            .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
+                let res = reftree
+                    .compare_topologies(&cmptree)
+                    .map(|c| format_record(&id, reftree.n_leaves(), &c));
+                sender.send(res).unwrap()
+            });
+        drop(sender);
+    });
 
-    // let (sender, receiver) = unbounded();
-    // thread::spawn(move || {
-    //     pairs
-    //         .into_par_iter()
-    //         .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
-    //             let res = reftree
-    //                 .compare_topologies(&cmptree)
-    //                 .map(|c| format_record(&id, reftree.n_leaves(), &c));
-    //             sender.send(res).unwrap()
-    //         });
-    //     drop(sender);
-    // });
-    //
-    // for record in receiver {
-    //     writer.write_all((record? + "\n").as_bytes())?;
-    // }
+    for record in receiver {
+        writer.write_all((record? + "\n").as_bytes())?;
+    }
 
-    writer.write_all((records?.join("\n") + "\n").as_bytes())?;
     writer.flush()?;
 
     if !not_found.is_empty() {
