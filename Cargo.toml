@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.75"
 clap = { version = "4.4.4", features = ["derive"] }
+crossbeam-channel = "0.5.8"
 gzp = "0.11.3"
 indicatif = "0.17.6"
 itertools = "0.11.0"
