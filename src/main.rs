@@ -1,16 +1,10 @@
-use std::{
-    ffi::{OsStr, OsString},
-    fs::{metadata, File},
-    io::Write,
-    path::PathBuf,
-    thread,
-};
+use std::{fs::File, io::Write, path::PathBuf, thread, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use crossbeam_channel::unbounded;
 use gzp::{deflate::Gzip, syncz::SyncZBuilder};
-use indicatif::ProgressIterator;
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use phylotree::tree::Tree;
 use rayon::prelude::*;
@@ -46,15 +40,7 @@ fn main() -> Result<()> {
     let args = Cli::parse();
 
     // Check that ref_trees is a directory
-    if !metadata(&args.ref_trees)
-        .context(format!(
-            "Could not read directory: {}",
-            args.ref_trees.display()
-        ))?
-        .is_dir()
-    {
-        bail!("{} is not a directory", args.ref_trees.display());
-    }
+    io::check_dir(&args.ref_trees)?;
 
     // Read reference trees
     let ref_trees = io::read_refs(&args.ref_trees)?;
@@ -78,7 +64,14 @@ fn main() -> Result<()> {
     let mut pairs = vec![];
 
     // Load tree pairs
-    for pair in io::trees_iter(&args.cmp_trees[0])?.progress_count(ref_trees.len() as u64) {
+    let bar = ProgressBar::new(ref_trees.len() as u64);
+    bar.enable_steady_tick(Duration::from_millis(80));
+    let spinner_style = ProgressStyle::with_template("{spinner:.cyan} {wide_msg}")
+        .unwrap()
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+    bar.set_style(spinner_style);
+    bar.set_message("Loading Trees");
+    for pair in io::trees_iter(&args.cmp_trees[0])? {
         let (id, tree) = match pair {
             Ok(p) => p,
             Err(e) => {
@@ -95,13 +88,17 @@ fn main() -> Result<()> {
         } else {
             not_found.push(id)
         }
+        bar.inc(1)
     }
+    bar.finish_with_message("Loaded reference trees");
 
     // Compare trees
     let (sender, receiver) = unbounded();
+
     thread::spawn(move || {
         pairs
             .into_par_iter()
+            .progress_count(ref_trees.len() as u64)
             .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
                 let res = do_comparison(&id, &reftree, &cmptree, args.lengths);
                 sender.send(res).unwrap()

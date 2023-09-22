@@ -1,11 +1,23 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use phylotree::tree::Tree;
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
-    fs,
+    fs::{self, metadata},
     path::{Path, PathBuf},
 };
+
+/// Check if path exists and is a directory
+pub fn check_dir(path: &Path) -> Result<()> {
+    if !metadata(path)
+        .context(format!("Could not read directory: {}", path.display()))?
+        .is_dir()
+    {
+        bail!("{} is not a directory", path.display());
+    }
+
+    Ok(())
+}
 
 // Check if file extensions match newick ones
 pub fn is_newick(path: &Path) -> bool {
