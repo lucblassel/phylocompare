@@ -16,14 +16,15 @@ mod io;
 /// Compare trees to reference trees
 struct Cli {
     /// Directory containing reference trees
-    #[clap(index = 1)]
     ref_trees: PathBuf,
     /// Directory containing trees to compare
-    #[clap(index = 2)]
     cmp_trees: Vec<PathBuf>,
     /// Output file
     #[arg(short, long)]
     output: PathBuf,
+    /// Add `marker` columns to csv output, specified in JSON format
+    #[arg(short, long)]
+    markers: Option<String>,
     /// Compare branch lengths instead of tree metrics
     #[arg(short, long)]
     lengths: bool,
@@ -57,7 +58,17 @@ fn main() -> Result<()> {
     } else {
         csv::CSVType::Trees
     };
-    writer.write_all((csv::get_header_string(out_type) + "\n").as_bytes())?;
+
+    let mut header = csv::get_header_string(out_type);
+    let mut markers = None;
+    if let Some(marker_str) = args.markers {
+        let (marker_header, marker_values) = csv::parse_markers(&marker_str)?;
+        header.push_str(&format!(",{marker_header}"));
+        markers = Some(marker_values);
+    }
+    let markers = markers;
+
+    writer.write_all((header + "\n").as_bytes())?;
 
     let mut errors = vec![];
     let mut not_found = vec![];
@@ -100,7 +111,7 @@ fn main() -> Result<()> {
             .into_par_iter()
             .progress_count(ref_trees.len() as u64)
             .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
-                let res = do_comparison(&id, &reftree, &cmptree, args.lengths);
+                let res = do_comparison(&id, &reftree, &cmptree, args.lengths, markers.as_deref());
                 sender.send(res).unwrap()
             });
         drop(sender);
@@ -134,31 +145,37 @@ fn main() -> Result<()> {
 }
 
 // The heart of the program
-fn do_comparison(id: &str, reftree: &Tree, cmptree: &Tree, brlens: bool) -> Result<String> {
+fn do_comparison(
+    id: &str,
+    reftree: &Tree,
+    cmptree: &Tree,
+    brlens: bool,
+    markers: Option<&str>,
+) -> Result<String> {
     let res = if brlens {
         let (refb, cmpb, common) = reftree.compare_branch_lengths(cmptree, false)?;
         let ref_s = refb
             .into_iter()
-            .map(|v| csv::format_branch_record(id, Some(v), None))
+            .map(|v| csv::format_branch_record(id, Some(v), None, markers))
             .join("\n")
             + "\n";
 
         let common_s = common
             .into_iter()
-            .map(|(r, c)| csv::format_branch_record(id, Some(r), Some(c)))
+            .map(|(r, c)| csv::format_branch_record(id, Some(r), Some(c), markers))
             .join("\n")
             + "\n";
 
         let cmp_s = cmpb
             .into_iter()
-            .map(|v| csv::format_branch_record(id, None, Some(v)))
+            .map(|v| csv::format_branch_record(id, None, Some(v), markers))
             .join("\n");
 
         ref_s + &common_s + &cmp_s
     } else {
         reftree
             .compare_topologies(cmptree)
-            .map(|c| csv::format_tree_record(id, reftree.n_leaves(), &c))?
+            .map(|c| csv::format_tree_record(id, reftree.n_leaves(), &c, markers))?
     };
 
     Ok(res)
