@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
+use gzp::{deflate::Gzip, syncz::SyncZBuilder};
 use phylotree::tree::Tree;
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
-    fs::{self, metadata},
+    fs::{self, metadata, File},
     path::{Path, PathBuf},
 };
 
@@ -74,4 +75,13 @@ pub fn add_gz_ext(path: PathBuf) -> PathBuf {
             path_str.into()
         }
     }
+}
+
+// Init writer
+pub fn init_writer(path: PathBuf) -> Result<impl std::io::Write> {
+    let output_path = add_gz_ext(path);
+    let output = File::create(output_path).context("Could not create output file")?;
+    let writer = SyncZBuilder::<Gzip, _>::new().from_writer(output);
+
+    Ok(writer)
 }

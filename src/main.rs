@@ -1,9 +1,8 @@
-use std::{fs::File, io::Write, path::PathBuf, thread, time::Duration};
+use std::{io::Write, path::PathBuf, thread, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Result};
 use clap::Parser;
 use crossbeam_channel::unbounded;
-use gzp::{deflate::Gzip, syncz::SyncZBuilder};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use phylotree::tree::Tree;
@@ -28,6 +27,10 @@ struct Cli {
     /// Compare branch lengths instead of tree metrics
     #[arg(short, long)]
     lengths: bool,
+    /// Include tips when comparing branches of trees (this flag is only
+    /// used when the `--lengths` flag is specified)
+    #[arg(short, long)]
+    include_tips: bool,
     /// If specified, the program will extract pairwise distances, compare them
     /// and write the result in the specified file
     #[arg(short, long)]
@@ -35,10 +38,23 @@ struct Cli {
     /// Exit the program early on error instead of listing them at the end
     #[arg(short, long)]
     strict: bool,
+    /// Number of threads to use in parallel (0 = all available threads)
+    #[arg(short, long, default_value_t = 0)]
+    threads: usize,
 }
 
 fn main() -> Result<()> {
     let args = Cli::parse();
+
+    // Build thread-pool
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .build_global()?;
+
+    // Check that we have trees to compare to reference
+    if args.cmp_trees.is_empty() {
+        bail!("You must specify at least 1 directory to compare to the reference");
+    }
 
     // Check that ref_trees is a directory
     io::check_dir(&args.ref_trees)?;
@@ -48,9 +64,7 @@ fn main() -> Result<()> {
     eprintln!("Reference trees loaded: {}", ref_trees.len());
 
     // init output file
-    let output_path = io::add_gz_ext(args.output);
-    let output = File::create(output_path).context("Could not create output file")?;
-    let mut writer = SyncZBuilder::<Gzip, _>::new().from_writer(output);
+    let mut writer = io::init_writer(args.output)?;
 
     // Write header to output file
     let out_type = if args.lengths {
@@ -75,13 +89,8 @@ fn main() -> Result<()> {
     let mut pairs = vec![];
 
     // Load tree pairs
-    let bar = ProgressBar::new(ref_trees.len() as u64);
-    bar.enable_steady_tick(Duration::from_millis(80));
-    let spinner_style = ProgressStyle::with_template("{spinner:.cyan} {wide_msg}")
-        .unwrap()
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
-    bar.set_style(spinner_style);
-    bar.set_message("Loading Trees");
+    let spinner = init_spinner(ref_trees.len() as u64);
+    spinner.set_message("Loading Trees");
     for pair in io::trees_iter(&args.cmp_trees[0])? {
         let (id, tree) = match pair {
             Ok(p) => p,
@@ -99,9 +108,9 @@ fn main() -> Result<()> {
         } else {
             not_found.push(id)
         }
-        bar.inc(1)
+        spinner.inc(1)
     }
-    bar.finish_with_message("Loaded reference trees");
+    spinner.finish_with_message("Loaded reference trees");
 
     // Compare trees
     let (sender, receiver) = unbounded();
@@ -111,7 +120,14 @@ fn main() -> Result<()> {
             .into_par_iter()
             .progress_count(ref_trees.len() as u64)
             .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
-                let res = do_comparison(&id, &reftree, &cmptree, args.lengths, markers.as_deref());
+                let res = do_comparison(
+                    &id,
+                    &reftree,
+                    &cmptree,
+                    args.lengths,
+                    args.include_tips,
+                    markers.as_deref(),
+                );
                 sender.send(res).unwrap()
             });
         drop(sender);
@@ -150,10 +166,11 @@ fn do_comparison(
     reftree: &Tree,
     cmptree: &Tree,
     brlens: bool,
+    include_tips: bool,
     markers: Option<&str>,
 ) -> Result<String> {
     let res = if brlens {
-        let (refb, cmpb, common) = reftree.compare_branch_lengths(cmptree, false)?;
+        let (refb, cmpb, common) = reftree.compare_branch_lengths(cmptree, include_tips)?;
         let ref_s = refb
             .into_iter()
             .map(|v| csv::format_branch_record(id, Some(v), None, markers))
@@ -179,4 +196,15 @@ fn do_comparison(
     };
 
     Ok(res)
+}
+
+fn init_spinner(len: u64) -> ProgressBar {
+    let bar = ProgressBar::new(len);
+    bar.enable_steady_tick(Duration::from_millis(80));
+    let spinner_style = ProgressStyle::with_template("{spinner:.cyan} {wide_msg}")
+        .unwrap()
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+    bar.set_style(spinner_style);
+
+    bar
 }
