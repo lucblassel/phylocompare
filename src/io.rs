@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
     fs::{self, metadata, File},
+    io::BufWriter,
     path::{Path, PathBuf},
 };
 
@@ -77,10 +78,19 @@ pub fn add_gz_ext(path: PathBuf) -> PathBuf {
     }
 }
 
-// Init writer
+// Init uncompressed writer
 pub fn init_writer(path: PathBuf) -> Result<impl std::io::Write> {
+    let output = File::create(path).context("Could not create output file.")?;
+    let writer = BufWriter::new(output);
+
+    Ok(writer)
+}
+
+// Init gzipped writer
+pub fn init_gz_writer(path: PathBuf) -> Result<impl std::io::Write> {
     let output_path = add_gz_ext(path);
-    let output = File::create(output_path).context("Could not create output file")?;
+    let output = File::create(output_path).context("Could not create compressed output file")?;
+
     let writer = SyncZBuilder::<Gzip, _>::new().from_writer(output);
 
     Ok(writer)

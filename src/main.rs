@@ -29,7 +29,7 @@ struct Cli {
     lengths: bool,
     /// Include tips when comparing branches of trees (this flag is only
     /// used when the `--lengths` flag is specified)
-    #[arg(short, long)]
+    #[arg(short = 't', long)]
     include_tips: bool,
     /// If specified, the program will extract pairwise distances, compare them
     /// and write the result in the specified file
@@ -41,6 +41,9 @@ struct Cli {
     /// Number of threads to use in parallel (0 = all available threads)
     #[arg(short, long, default_value_t = 0)]
     threads: usize,
+    /// Do not compress output csv using gzip
+    #[arg(short, long)]
+    no_compression: bool,
 }
 
 fn main() -> Result<()> {
@@ -64,7 +67,11 @@ fn main() -> Result<()> {
     eprintln!("Reference trees loaded: {}", ref_trees.len());
 
     // init output file
-    let mut writer = io::init_writer(args.output)?;
+    let mut writer: Box<dyn std::io::Write> = if args.no_compression {
+        Box::new(io::init_writer(args.output)?)
+    } else {
+        Box::new(io::init_gz_writer(args.output)?)
+    };
 
     // Write header to output file
     let out_type = if args.lengths {
