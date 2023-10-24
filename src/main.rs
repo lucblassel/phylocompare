@@ -180,19 +180,21 @@ fn do_comparison(
         let (refb, cmpb, common) = reftree.compare_branch_lengths(cmptree, include_tips)?;
         let ref_s = refb
             .into_iter()
-            .map(|v| csv::format_branch_record(id, Some(v), None, markers))
+            .map(|(d, l)| csv::format_branch_record(id, Some(l), Some(d), None, None, markers))
             .join("\n")
             + "\n";
 
         let common_s = common
             .into_iter()
-            .map(|(r, c)| csv::format_branch_record(id, Some(r), Some(c), markers))
+            .map(|((rd, rl), (cd, cl))| {
+                csv::format_branch_record(id, Some(rl), Some(rd), Some(cl), Some(cd), markers)
+            })
             .join("\n")
             + "\n";
 
         let cmp_s = cmpb
             .into_iter()
-            .map(|v| csv::format_branch_record(id, None, Some(v), markers))
+            .map(|(d, l)| csv::format_branch_record(id, None, None, Some(l), Some(d), markers))
             .join("\n");
 
         ref_s + &common_s + &cmp_s

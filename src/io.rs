@@ -43,10 +43,12 @@ pub fn get_file_id(path: &Path) -> Result<String> {
 
 // Read a newick file and extract the identifier
 pub fn read_tree(treepath: &Path) -> Result<(String, Tree)> {
-    let tree = Tree::from_file(treepath).context(format!(
+    let mut tree = Tree::from_file(treepath).context(format!(
         "Could not parse newick file: {}",
         treepath.display()
     ))?;
+
+    tree.reset_depths()?;
 
     Ok((get_file_id(treepath)?, tree))
 }

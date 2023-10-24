@@ -5,8 +5,8 @@ use itertools::Itertools;
 use phylotree::tree::Comparison;
 
 const TREES_HEADER: [&str; 6] = ["id", "size", "rf", "norm_rf", "rf_weight", "kf_score"];
-const DISTS_HEADER: [&str; 3] = ["id", "ref", "comp"]; // Used for pairwise distances and branch
-                                                       // length outputs
+const BRANCHES_HEADER: [&str; 5] = ["id", "ref_len", "ref_depth", "comp_len", "comp_depth"];
+const DISTS_HEADER: [&str; 3] = ["id", "ref", "comp"];
 
 pub enum CSVType {
     Trees,
@@ -18,7 +18,8 @@ pub enum CSVType {
 pub fn get_header_string(csv_type: CSVType) -> String {
     match csv_type {
         CSVType::Trees => TREES_HEADER.join(","),
-        CSVType::Distances | CSVType::Branches => DISTS_HEADER.join(","),
+        CSVType::Branches => BRANCHES_HEADER.join(","),
+        CSVType::Distances => DISTS_HEADER.join(","),
     }
 }
 
@@ -50,13 +51,17 @@ pub fn format_tree_record(
 pub fn format_branch_record(
     id: &str,
     reflen: Option<f64>,
+    refdepth: Option<usize>,
     cmplen: Option<f64>,
+    cmpdepth: Option<usize>,
     markers: Option<&str>,
 ) -> String {
-    let ref_s = reflen.map(|v| format!("{v}")).unwrap_or("".into());
-    let cmp_s = cmplen.map(|v| format!("{v}")).unwrap_or("".into());
+    let reflen = reflen.map(|v| format!("{v}")).unwrap_or("".into());
+    let cmplen = cmplen.map(|v| format!("{v}")).unwrap_or("".into());
+    let refdepth = refdepth.map(|v| format!("{v}")).unwrap_or("".into());
+    let cmpdepth = cmpdepth.map(|v| format!("{v}")).unwrap_or("".into());
 
-    let mut csv = format!("{id},{ref_s},{cmp_s}");
+    let mut csv = format!("{id},{reflen},{refdepth},{cmplen},{cmpdepth}");
     if let Some(markers) = markers {
         add_marker(&mut csv, markers)
     }
