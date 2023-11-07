@@ -1,14 +1,17 @@
-use std::{io::Write, path::PathBuf, thread, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 use anyhow::{bail, Result};
 use clap::Parser;
 use crossbeam_channel::unbounded;
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
-use itertools::Itertools;
-use phylotree::tree::Tree;
 use rayon::prelude::*;
 
-mod csv;
+mod comp;
+// mod csv;
 mod io;
 
 #[derive(Parser)]
@@ -18,28 +21,37 @@ struct Cli {
     ref_trees: PathBuf,
     /// Directory containing trees to compare
     cmp_trees: Vec<PathBuf>,
-    /// Output file
+    /// Output file prefix that will be used for all output files
     #[arg(short, long)]
-    output: PathBuf,
-    /// Add `marker` columns to csv output, specified in JSON format
+    output_prefix: PathBuf,
+    /// Add `marker` columns to csv output with this constant.  
+    /// If unset, the column will be empty in the output file
     #[arg(short, long)]
-    markers: Option<String>,
+    marker: Option<String>,
     /// Compare branch lengths instead of tree metrics
     #[arg(short, long)]
     lengths: bool,
     /// Include tips when comparing branches of trees (this flag is only
     /// used when the `--lengths` flag is specified)
-    #[arg(short = 't', long)]
+    #[arg(short = 'i', long)]
     include_tips: bool,
-    /// If specified, the program will extract pairwise distances, compare them
-    /// and write the result in the specified file
+    /// If specified compare pairwise distances
     #[arg(short, long)]
-    distances: Option<PathBuf>,
+    distances: bool,
+    /// If specified compare topologies
+    #[arg(short, long)]
+    topology: bool,
+    /// If specified compare branches
+    #[arg(short, long)]
+    branches: bool,
+    /// Compare everything: topology, branches and pairwise distances.
+    #[arg(short, long)]
+    all: bool,
     /// Exit the program early on error instead of listing them at the end
     #[arg(short, long)]
     strict: bool,
     /// Number of threads to use in parallel (0 = all available threads)
-    #[arg(short, long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0)]
     threads: usize,
     /// Do not compress output csv using gzip
     #[arg(short, long)]
@@ -62,34 +74,31 @@ fn main() -> Result<()> {
     // Check that ref_trees is a directory
     io::check_dir(&args.ref_trees)?;
 
+    // Set up comparison mode
+    let compare_topo = args.topology || args.all;
+    let compare_lens = args.lengths || args.all;
+    let compare_dist = args.distances || args.all;
+
+    if !compare_topo && !compare_lens && !compare_dist {
+        bail!(
+            "You must specify at least one modality to compare: topology, branches, lengths or all"
+        )
+    }
+
     // Read reference trees
     let ref_trees = io::read_refs(&args.ref_trees)?;
     eprintln!("Reference trees loaded: {}", ref_trees.len());
 
-    // init output file
-    let mut writer: Box<dyn std::io::Write> = if args.no_compression {
-        Box::new(io::init_writer(args.output)?)
-    } else {
-        Box::new(io::init_gz_writer(args.output)?)
-    };
+    // init output files
+    let zipped = !args.no_compression;
+    let dist_path = io::get_suffixed_filenme(&args.output_prefix, "dist", "csv", zipped)?;
+    let mut dist_writer = io::get_output(dist_path.clone(), zipped, compare_dist)?;
 
-    // Write header to output file
-    let out_type = if args.lengths {
-        csv::CSVType::Branches
-    } else {
-        csv::CSVType::Trees
-    };
+    let topo_path = io::get_suffixed_filenme(&args.output_prefix, "topo", "csv", zipped)?;
+    let mut topo_writer = io::get_output(topo_path.clone(), zipped, compare_topo)?;
 
-    let mut header = csv::get_header_string(out_type);
-    let mut markers = None;
-    if let Some(marker_str) = args.markers {
-        let (marker_header, marker_values) = csv::parse_markers(&marker_str)?;
-        header.push_str(&format!(",{marker_header}"));
-        markers = Some(marker_values);
-    }
-    let markers = markers;
-
-    writer.write_all((header + "\n").as_bytes())?;
+    let brlen_path = io::get_suffixed_filenme(&args.output_prefix, "brlen", "csv", zipped)?;
+    let mut brlen_writer = io::get_output(brlen_path.clone(), zipped, compare_lens)?;
 
     let mut errors = vec![];
     let mut not_found = vec![];
@@ -127,24 +136,50 @@ fn main() -> Result<()> {
             .into_par_iter()
             .progress_count(ref_trees.len() as u64)
             .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
-                let res = do_comparison(
-                    &id,
+                let res = comp::compare_trees(
+                    id,
                     &reftree,
                     &cmptree,
-                    args.lengths,
+                    compare_topo,
+                    compare_lens,
+                    compare_dist,
                     args.include_tips,
-                    markers.as_deref(),
                 );
-                sender.send(res).unwrap()
+
+                match sender.send(res) {
+                    Ok(_) => {}
+                    Err(e) => eprintln!("Error sending: {e:?}"),
+                };
             });
         drop(sender);
     });
 
     for record in receiver {
-        writer.write_all((record? + "\n").as_bytes())?;
+        let record = record?;
+
+        if let Some(mut topo) = record.topology {
+            topo.marker = args.marker.clone();
+            topo_writer.as_mut().map(|w| w.serialize(topo));
+        }
+
+        if let Some(brlens) = record.branches {
+            for mut brlen in brlens {
+                brlen.marker = args.marker.clone();
+                brlen_writer.as_mut().map(|w| w.serialize(brlen));
+            }
+        }
+
+        if let Some(dists) = record.distances {
+            for mut dist in dists {
+                dist.marker = args.marker.clone();
+                dist_writer.as_mut().map(|w| w.serialize(dist));
+            }
+        }
     }
 
-    writer.flush()?;
+    dist_writer.as_mut().map(|w| w.flush());
+    brlen_writer.as_mut().map(|w| w.flush());
+    topo_writer.as_mut().map(|w| w.flush());
 
     if !not_found.is_empty() {
         let n = not_found.len();
@@ -164,47 +199,17 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(_) = dist_writer {
+        eprintln!("Wrote distance comparison to:  {}", dist_path.display())
+    }
+    if let Some(_) = topo_writer {
+        eprintln!("Wrote topology comparison to:  {}", topo_path.display())
+    }
+    if let Some(_) = brlen_writer {
+        eprintln!("Wrote branch   comparison to:  {}", brlen_path.display())
+    }
+
     Ok(())
-}
-
-// The heart of the program
-fn do_comparison(
-    id: &str,
-    reftree: &Tree,
-    cmptree: &Tree,
-    brlens: bool,
-    include_tips: bool,
-    markers: Option<&str>,
-) -> Result<String> {
-    let res = if brlens {
-        let (refb, cmpb, common) = reftree.compare_branch_lengths(cmptree, include_tips)?;
-        let ref_s = refb
-            .into_iter()
-            .map(|(d, l)| csv::format_branch_record(id, Some(l), Some(d), None, None, markers))
-            .join("\n")
-            + "\n";
-
-        let common_s = common
-            .into_iter()
-            .map(|((rd, rl), (cd, cl))| {
-                csv::format_branch_record(id, Some(rl), Some(rd), Some(cl), Some(cd), markers)
-            })
-            .join("\n")
-            + "\n";
-
-        let cmp_s = cmpb
-            .into_iter()
-            .map(|(d, l)| csv::format_branch_record(id, None, None, Some(l), Some(d), markers))
-            .join("\n");
-
-        ref_s + &common_s + &cmp_s
-    } else {
-        reftree
-            .compare_topologies(cmptree)
-            .map(|c| csv::format_tree_record(id, reftree.n_leaves(), &c, markers))?
-    };
-
-    Ok(res)
 }
 
 fn init_spinner(len: u64) -> ProgressBar {

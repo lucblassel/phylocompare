@@ -1,11 +1,11 @@
 use anyhow::{bail, Context, Result};
-use gzp::{deflate::Gzip, syncz::SyncZBuilder};
+use flate2::{write::GzEncoder, Compression};
 use phylotree::tree::Tree;
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
     fs::{self, metadata, File},
-    io::BufWriter,
+    io::{self},
     path::{Path, PathBuf},
 };
 
@@ -80,20 +80,58 @@ pub fn add_gz_ext(path: PathBuf) -> PathBuf {
     }
 }
 
-// Init uncompressed writer
-pub fn init_writer(path: PathBuf) -> Result<impl std::io::Write> {
-    let output = File::create(path).context("Could not create output file.")?;
-    let writer = BufWriter::new(output);
-
-    Ok(writer)
+// Initialize write with out without compression
+pub fn init_writer(path: PathBuf, zipped: bool) -> Result<Box<dyn io::Write + 'static>> {
+    let file = File::create(&path).context("Could not create output file")?;
+    Ok(if zipped {
+        Box::new(GzEncoder::new(file, Compression::default()))
+    } else {
+        Box::new(file)
+    })
 }
 
-// Init gzipped writer
-pub fn init_gz_writer(path: PathBuf) -> Result<impl std::io::Write> {
-    let output_path = add_gz_ext(path);
-    let output = File::create(output_path).context("Could not create compressed output file")?;
+// Create CSV wrriter from IO writer
+pub fn from_writer<W: io::Write>(wtr: W) -> csv::Writer<W> {
+    csv::Writer::from_writer(wtr)
+}
 
-    let writer = SyncZBuilder::<Gzip, _>::new().from_writer(output);
+// Get output writer, zipped or not
+pub fn get_output(
+    path: PathBuf,
+    zipped: bool,
+    is_some: bool,
+) -> Result<Option<csv::Writer<Box<dyn io::Write>>>> {
+    Ok(if is_some {
+        Some(from_writer(init_writer(path, zipped)?))
+    } else {
+        None
+    })
+}
 
-    Ok(writer)
+pub fn get_suffixed_filenme(path: &PathBuf, suffix: &str, ext: &str, zip: bool) -> Result<PathBuf> {
+    let mut pb = path.clone();
+    let mut stem = pb.clone();
+    let mut previous_stem = stem.clone();
+
+    let mut guard = 0;
+    while let Some(new_stem) = stem.file_stem() {
+        if guard > 100 {
+            bail! {"Could not deduce file prefix for: {}", pb.display()}
+        }
+        stem = PathBuf::from(new_stem);
+        if stem == previous_stem {
+            break;
+        }
+        previous_stem = stem.clone();
+        guard += 1;
+    }
+
+    let stem_str = stem
+        .to_str()
+        .context("Could not convert output file name to string")?;
+
+    pb.set_file_name(format!("{stem_str}_{suffix}"));
+    pb.set_extension(ext);
+
+    Ok(if zip { add_gz_ext(pb) } else { pb })
 }
