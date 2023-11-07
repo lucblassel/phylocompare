@@ -59,7 +59,7 @@ jobs:
     needs: test
     runs-on: ${{ matrix.OS }}
     env:
-      NAME: rust-cross-compile-example # change with the name of your project
+      NAME: phylocompare # change with the name of your project
       TARGET: ${{ matrix.TARGET }}
       OS: ${{ matrix.OS }}
     steps:
@@ -98,10 +98,13 @@ jobs:
           EOF
       - name: Install rust target
         run: rustup target add $TARGET
+
       - name: Run build
         run: cargo build --release --verbose --target $TARGET
+
       - name: List target
-        run: find ./target
+        run: ls ./target/$RELEASE/release
+
       - name: Compress
         run: |
           mkdir -p ./artifacts
