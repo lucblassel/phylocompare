@@ -125,12 +125,12 @@ pub fn compare_trees(
     compare_lens: bool,
     compare_dist: bool,
     include_tips: bool,
-) -> Result<ComparisonRecord> {
-    let mut record = ComparisonRecord {
+) -> Result<Box<ComparisonRecord>> {
+    let mut record = Box::new(ComparisonRecord {
         topology: None,
         branches: None,
         distances: None,
-    };
+    });
 
     let id = id.into();
 
