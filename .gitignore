@@ -53,4 +53,4 @@ Cargo.lock
 
 *.gz
 *.gzip
-
+*.csv
