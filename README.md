@@ -10,6 +10,41 @@ This tool can output several different pieces of information:
 - Comparison of extracted pairwise distances
 - Branches in common or exclusive to each tree and their lengths
 
+## Usage
+The simplest command to get all the results files is: 
+```bash
+phylocompare --all --output-prefix test_results test_data/reftrees test_data/cmptrees
+```
+
+This will create 3 gzip compressed csv files: `test_results_brlen.csv.gz`, `test_results_dist.csv.gz`, `test_results_topo.csv.gz`. 
+
+Full usage message: 
+```
+Usage: phylocompare [OPTIONS] --output-prefix <OUTPUT_PREFIX> <REF_TREES> [CMP_TREES]...
+
+Arguments:
+  <REF_TREES>     Directory containing reference trees
+  [CMP_TREES]...  Directory containing trees to compare
+
+Options:
+  -o, --output-prefix <OUTPUT_PREFIX>  Output file prefix that will be used for all output files
+  -m, --marker <MARKER>                Add `marker` columns to csv output with this constant. If uns
+et, the column will be empty in the output file
+  -l, --lengths                        Compare branch lengths instead of tree metrics
+  -i, --include-tips                   Include tips when comparing branches of trees (this flag is o
+nly used when the `--lengths` flag is specified)
+  -d, --distances                      If specified compare pairwise distances
+  -t, --topology                       If specified compare topologies
+  -b, --branches                       If specified compare branches
+  -a, --all                            Compare everything: topology, branches and pairwise distances
+  -s, --strict                         Exit the program early on error instead of listing them at th
+e end
+      --threads <THREADS>              Number of threads to use in parallel (0 = all available threa
+ds) [default: 0]
+  -n, --no-compression                 Do not compress output csv using gzip
+  -h, --help                           Print help
+```
+
 ## Benchmarking
 `hyperfine --export-markdown bench.md --warmup 5 './target/release/phylocompare  -o t.gz ../get_rf/test/tree
 s1 ../get_rf/test/trees.renamed'`
