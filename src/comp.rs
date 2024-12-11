@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use itertools::Itertools;
 use phylotree::tree::{Comparison, Tree};
@@ -5,7 +7,7 @@ use serde::Serialize;
 
 #[derive(Serialize, Default, Debug)]
 pub struct BranchRecord {
-    pub id: String,
+    pub id: Arc<String>,
     pub ref_len: Option<f64>,
     pub ref_depth: Option<usize>,
     pub cmp_len: Option<f64>,
@@ -18,7 +20,7 @@ impl BranchRecord {
         reftree: &Tree,
         cmptree: &Tree,
         include_tips: bool,
-        id: &String,
+        id: Arc<String>,
     ) -> Result<Vec<Self>> {
         let (reference, compared, common) =
             reftree.compare_branch_lengths(cmptree, include_tips)?;
@@ -53,7 +55,7 @@ impl BranchRecord {
 
 #[derive(Default, Debug, Serialize)]
 pub struct DistanceRecord {
-    pub id: String,
+    pub id: Arc<String>,
     pub ref_dist: f64,
     pub cmp_dist: f64,
     pub marker: Option<String>,
@@ -64,13 +66,12 @@ impl DistanceRecord {
         size * (size - 1) / 2
     }
 
-    fn from_trees(reftree: &Tree, cmptree: &Tree, id: &String) -> Result<Vec<Self>> {
+    fn from_trees(reftree: &Tree, cmptree: &Tree, id: Arc<String>) -> Result<Vec<Self>> {
         let mut dists = Vec::with_capacity(Self::get_cap(reftree.n_leaves()));
         let ref_dists = reftree.distance_matrix()?;
         let cmp_dists = cmptree.distance_matrix()?;
 
-        for pair in ref_dists.taxa.iter().combinations(2) {
-            let (tip_1, tip_2) = (pair[0], pair[1]);
+        for (tip_1, tip_2) in ref_dists.taxa.iter().tuple_combinations() {
 
             let &ref_dist = ref_dists.get(tip_1, tip_2).unwrap_or(&f64::NAN);
             let &cmp_dist = cmp_dists.get(tip_1, tip_2).unwrap_or(&f64::NAN);
@@ -89,7 +90,7 @@ impl DistanceRecord {
 
 #[derive(Debug, Default, Serialize)]
 pub struct TopologyRecord {
-    pub id: String,
+    pub id: Arc<String>,
     pub rf: f64,
     pub norm_rf: f64,
     pub weighted_rf: f64,
@@ -132,7 +133,7 @@ pub fn compare_trees(
         distances: None,
     });
 
-    let id = id.into();
+    let id = Arc::new(id.into());
 
     // Compare topologies
     if compare_topo {
@@ -148,13 +149,13 @@ pub fn compare_trees(
             reftree,
             cmptree,
             include_tips,
-            &id,
+            id.clone(),
         )?);
     }
 
     // Compare distances
     if compare_dist {
-        record.distances = Some(DistanceRecord::from_trees(reftree, cmptree, &id)?);
+        record.distances = Some(DistanceRecord::from_trees(reftree, cmptree, id)?);
     }
 
     Ok(record)
