@@ -1,12 +1,13 @@
 use std::{
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{bounded, unbounded};
 use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
@@ -100,42 +101,47 @@ fn main() -> Result<()> {
     let brlen_path = io::get_suffixed_filenme(&args.output_prefix, "brlen", "csv", zipped)?;
     let mut brlen_writer = io::get_output(brlen_path.clone(), zipped, compare_lens)?;
 
-    let mut errors = vec![];
-    let mut not_found = vec![];
-    let mut pairs = vec![];
+    let errors = Arc::new(Mutex::new(vec![]));
+    let not_found = Arc::new(Mutex::new(vec![]));
+    // let mut pairs = vec![];
 
+    let (task_sender, task_receiver) = bounded(50);
     // Load tree pairs
     let spinner = init_spinner(ref_trees.len() as u64);
     spinner.set_message("Loading Trees");
-    for pair in io::trees_iter(&args.cmp_trees[0])? {
-        let (id, tree) = match pair {
-            Ok(p) => p,
-            Err(e) => {
-                if args.strict {
-                    return Err(e);
-                }
-                errors.push(e);
-                continue;
-            }
-        };
+    thread::spawn({
+        let not_found = not_found.clone();
+        let errors = errors.clone();
+        move || {
+            for pair in io::trees_iter(&args.cmp_trees[0]).unwrap() {
+                let (id, tree) = match pair {
+                    Ok(p) => p,
+                    err if args.strict => err.unwrap(),
+                    Err(e) => {
+                        errors.lock().unwrap().push(e);
+                        continue;
+                    }
+                };
 
-        if let Some(reftree) = ref_trees.get(&id) {
-            pairs.push((id, reftree.clone(), tree));
-        } else {
-            not_found.push(id)
+                if let Some(reftree) = ref_trees.get(&id) {
+                    task_sender.send((id, reftree.clone(), tree)).unwrap();
+                } else {
+                    not_found.lock().unwrap().push(id)
+                }
+            }
         }
-        spinner.inc(1)
-    }
+    });
+
     spinner.finish_with_message("Loaded reference trees");
 
     // Compare trees
-    let (sender, receiver) = unbounded();
+    let (result_sender, result_receiver) = bounded(100);
 
-    thread::spawn(move || {
-        pairs
-            .into_par_iter()
-            .progress_count(ref_trees.len() as u64)
-            .for_each_with(&sender, |sender, (id, reftree, cmptree)| {
+    for _ in 0..std::thread::available_parallelism()?.get() {
+        let task_receiver = task_receiver.clone();
+        let result_sender = result_sender.clone();
+        thread::spawn(move || {
+            for (id, reftree, cmptree) in task_receiver {
                 let res = comp::compare_trees(
                     id,
                     &reftree,
@@ -146,15 +152,17 @@ fn main() -> Result<()> {
                     args.include_tips,
                 );
 
-                match sender.send(res) {
+                match result_sender.send(res) {
                     Ok(_) => {}
                     Err(e) => eprintln!("Error sending: {e:?}"),
                 };
-            });
-        drop(sender);
-    });
+            }
+            drop(result_sender);
+        });
+    }
+    drop(result_sender);
 
-    for record in receiver {
+    for record in result_receiver {
         let record = record?;
 
         if let Some(mut topo) = record.topology {
@@ -181,10 +189,12 @@ fn main() -> Result<()> {
     brlen_writer.as_mut().map(|w| w.flush());
     topo_writer.as_mut().map(|w| w.flush());
 
+    let mut not_found = not_found.lock().unwrap();
+    let mut errors = errors.lock().unwrap();
     if !not_found.is_empty() {
         let n = not_found.len();
         eprintln!("Could not find reference {n} trees:");
-        for tree in not_found.into_iter().take(10) {
+        for tree in not_found.drain(..10) {
             eprintln!("\t- {}", tree)
         }
         if n > 10 {
@@ -194,7 +204,7 @@ fn main() -> Result<()> {
 
     if !errors.is_empty() {
         eprintln!("There were errors reading some trees:");
-        for err in errors {
+        for err in errors.drain(..) {
             eprintln!("{}", err);
         }
     }

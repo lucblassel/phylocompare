@@ -5,8 +5,8 @@ use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
     fs::{self, metadata, File},
-    io::{self},
-    path::{Path, PathBuf},
+    io::{self, BufWriter},
+    path::{Path, PathBuf}, sync::Arc,
 };
 
 /// Check if path exists and is a directory
@@ -55,8 +55,8 @@ pub fn read_tree(treepath: &Path) -> Result<(String, Tree)> {
 
 // Load reference trees
 pub fn read_refs(ref_dir: &Path) -> Result<HashMap<String, Tree>> {
-    let trees: Result<Vec<_>> = trees_iter(ref_dir)?.collect();
-    Ok(HashMap::from_iter(trees?))
+    let trees: Result<HashMap<_,_>> = trees_iter(ref_dir)?.collect();
+    trees
 }
 
 // Iterate over newick files in a directory and parse them
@@ -83,8 +83,9 @@ pub fn add_gz_ext(path: PathBuf) -> PathBuf {
 // Initialize write with out without compression
 pub fn init_writer(path: PathBuf, zipped: bool) -> Result<Box<dyn io::Write + 'static>> {
     let file = File::create(&path).context("Could not create output file")?;
+    let file = BufWriter::new(file);
     Ok(if zipped {
-        Box::new(GzEncoder::new(file, Compression::default()))
+        Box::new(GzEncoder::new(file, Compression::fast()))
     } else {
         Box::new(file)
     })
